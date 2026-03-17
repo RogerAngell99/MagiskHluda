@@ -128,8 +128,10 @@ jobs:
           rm -rf florida-patches frida build-android-arm build-android-arm64 build-android-x86 build-android-x86_64 bin
           git config --global user.name "GitHub Actions"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git clone --depth 1 --branch "$MAGISKHLUDA_PATCH_REF" https://github.com/Ylarod/Florida.git florida-patches
-          git clone --depth 1 --branch "$MAGISKHLUDA_RELEASE_TAG" --recurse-submodules https://github.com/frida/frida.git frida
+          git clone --branch "$MAGISKHLUDA_PATCH_REF" https://github.com/Ylarod/Florida.git florida-patches
+          git clone --recurse-submodules https://github.com/frida/frida.git frida
+          git -C frida checkout "$MAGISKHLUDA_RELEASE_TAG"
+          git -C frida submodule update --init --recursive
 
           cd frida
           shopt -s nullglob
@@ -144,7 +146,7 @@ jobs:
               exit 1
             fi
             cd "subprojects/$name"
-            git am "../../../florida-patches/patches/$name/"*.patch
+            git am -3 "../../../florida-patches/patches/$name/"*.patch
             cd ../..
           done
           cd ..
