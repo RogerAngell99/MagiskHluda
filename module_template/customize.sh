@@ -4,7 +4,6 @@ SKIPUNZIP=1
 DEBUG=false
 MIN_KSU_VERSION=10940
 MIN_KSUD_VERSION=11575
-MAX_KSU_VERSION=20000
 MIN_APATCH_VERSION=10700
 MIN_MAGISK_VERSION=20400
 
@@ -19,10 +18,6 @@ if [ "$BOOTMODE" ] && [ "$KSU" ]; then
   if ! [ "$KSU_KERNEL_VER_CODE" ] || [ "$KSU_KERNEL_VER_CODE" -lt "$MIN_KSU_VERSION" ]; then
     ui_print "! KernelSU version is too old!"
     abort "! Please update KernelSU to latest version!";
-    elif [ "$KSU_KERNEL_VER_CODE" -ge "$MAX_KSU_VERSION" ]; then
-    ui_print "! KernelSU version abnormal!"
-    ui_print "! Please integrate KernelSU into your kernel"
-    abort "as submodule instead of copying the source code.";
   fi
   if ! [ "$KSU_VER_CODE" ] || [ "$KSU_VER_CODE" -lt "$MIN_KSUD_VERSION" ]; then
     print_title "! ksud version is too old!" "! Please update KernelSU Manager to latest version"
