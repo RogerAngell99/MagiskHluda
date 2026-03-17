@@ -14,6 +14,7 @@ let isServerRunning = false;
 
 const MODULE_PROP_PATH = '/data/adb/modules/magisk-hluda/module.prop';
 const MODULE_SETTINGS_FILE = '/data/adb/modules/magisk-hluda/module.cfg';
+const FLORIDA_BIN = '/data/adb/modules/magisk-hluda/system/bin/florida';
 
 async function initializeConfigFile() {
     try {
@@ -123,7 +124,14 @@ async function checkServerStatus() {
 }
 
 async function startServer(port, customParams) {
-    const baseCommand = `florida -D -l 0.0.0.0:${port}`;
+    const {errno: binaryErrno} = await exec(`test -x ${FLORIDA_BIN}`);
+    if (binaryErrno !== 0) {
+        toast(`Failed to start server: ${FLORIDA_BIN} is not executable`);
+        updateStatus(false);
+        return;
+    }
+
+    const baseCommand = `${FLORIDA_BIN} -D -l 0.0.0.0:${port}`;
     const fullCommand = customParams ? `${baseCommand} ${customParams}` : baseCommand;
 
     try {

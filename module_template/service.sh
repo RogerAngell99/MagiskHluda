@@ -4,6 +4,7 @@ DEBUG=false
 MODDIR=${0%/*}
 MODULE_PROP="/data/adb/modules/magisk-hluda/module.prop"
 MODULE_CFG="/data/adb/modules/magisk-hluda/module.cfg"
+FLORIDA_BIN="$MODDIR/system/bin/florida"
 
 # Wait for boot completion
 while [ "$(getprop sys.boot_completed)" != 1 ]; do
@@ -16,6 +17,11 @@ sleep 5
 # Sync status from module.cfg to module.prop
 if [ ! -f "$MODULE_CFG" ]; then
    sed -i 's/^description=.*/description=[Error: Config Missing ⚠️]/' "$MODULE_PROP"
+   exit 1
+fi
+
+if [ ! -x "$FLORIDA_BIN" ]; then
+   sed -i 's/^description=.*/description=[Error: Binary Missing ⚠️]/' "$MODULE_PROP"
    exit 1
 fi
 
@@ -37,21 +43,21 @@ if [ -f "$MODULE_CFG" ]; then
        # Start service if not running
        if ! pgrep -x "florida" > /dev/null; then
            # Build command with port and parameters
-           CMD="florida -D -l 0.0.0.0:$port"
+            CMD="$FLORIDA_BIN -D -l 0.0.0.0:$port"
 
            # Add additional parameters if specified
            if [ -n "$parameters" ]; then
                CMD="$CMD $parameters"
            fi
 
-           # Execute the command and check result
-           if ! $CMD; then
-               sed -i 's/^description=.*/description=[Start Failed ⚠️]/' "$MODULE_PROP"
-           fi
-       fi
-   else
-       # Update module.prop to show stopped status
-       sed -i 's/^description=.*/description=[Stopped❌]/' "$MODULE_PROP"
+            # Execute the command and check result
+            if ! $CMD; then
+                sed -i 's/^description=.*/description=[Start Failed ⚠️]/' "$MODULE_PROP"
+            fi
+        fi
+    else
+        # Update module.prop to show stopped status
+        sed -i 's/^description=.*/description=[Stopped❌]/' "$MODULE_PROP"
    fi
 else
    # Log error if config file is missing
