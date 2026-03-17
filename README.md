@@ -1,7 +1,7 @@
 # **Florida on Boot: Seamlessly Start a More Undetectable Frida-server on Boot**
 
-![GitHub repo size](https://img.shields.io/github/repo-size/Exo1i/MagiskHluda)
-![GitHub downloads](https://img.shields.io/github/downloads/Exo1i/magiskhluda/total)
+![GitHub repo size](https://img.shields.io/github/repo-size/RogerAngell99/MagiskHluda)
+![GitHub downloads](https://img.shields.io/github/downloads/RogerAngell99/magiskhluda/total)
 
 ## **Overview**
 
@@ -36,7 +36,7 @@ Stopping the Florida server **may cause the System UI to crash**. This is a know
 
 ## **Getting Started**
 
-1. **Download the latest release:** Visit the [Releases](https://github.com/Exo1i/MagiskHluda/releases) page and download the latest ZIP file that corresponds to your device's architecture or just use the universal package.
+1. **Download the latest release:** Visit the [Releases](https://github.com/RogerAngell99/MagiskHluda/releases) page and download the latest ZIP file that corresponds to your device's architecture or just use the universal package.
 2. **Install via Magisk/KSU/KSUN/APatch:** Use any root solution to install the module.
 
 ## **Automatic Updates**
@@ -45,7 +45,7 @@ Stopping the Florida server **may cause the System UI to crash**. This is a know
 
 ## **Troubleshooting**
 
-If you encounter any issues, refer to the [Troubleshooting Guide](https://github.com/Exo1i/MagiskHluda/blob/main/troubleshooting.md).
+If you encounter any issues, refer to the [Troubleshooting Guide](https://github.com/RogerAngell99/MagiskHluda/blob/main/troubleshooting.md).
 
 ## **Building from Source**
 
@@ -66,8 +66,8 @@ Special thanks to:
 
 Thanks to all contributors who have helped with this project!
 
-<a href="https://github.com/Exo1i/MagiskHluda/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Exo1i/MagiskHluda" />
+<a href="https://github.com/RogerAngell99/MagiskHluda/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=RogerAngell99/MagiskHluda" />
 </a>
 
 

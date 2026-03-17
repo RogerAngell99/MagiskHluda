@@ -11,13 +11,9 @@ using namespace std;
 class utils {
 public:
     static string latestTag;
-
-
+    static void initializeReleaseMetadata();
 
     static void createModuleProps();
-
-    static string getRecentTag();
-
 
     static void downloadServers();
 

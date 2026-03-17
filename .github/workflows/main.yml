@@ -9,27 +9,76 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Fetch release info
         run: |
-          sudo apt install jq
-          LATESTFLORIDARELEASETAG=$(curl -s https://api.github.com/repos/hzzheyang/strongR-frida-android/releases/latest | jq -r '.tag_name')
-          LATESTMODULETAG=$(curl -s https://api.github.com/repos/Exo1i/MagiskHluda/releases/latest | jq -r '.tag_name')
-          echo "LATESTFLORIDARELEASETAG=${LATESTFLORIDARELEASETAG}" >> $GITHUB_ENV
-          echo "LATESTMODULETAG=${LATESTMODULETAG}" >> $GITHUB_ENV
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          REQUIRED_ARCHES = ("arm", "arm64", "x86", "x86_64")
+          repo = os.environ["GITHUB_REPOSITORY"]
+
+          def get_json(url: str, allow_404: bool = False):
+              request = urllib.request.Request(url, headers={"User-Agent": "github-actions"})
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as exc:
+                  if allow_404 and exc.code == 404:
+                      return None
+                  raise
+
+          releases = get_json("https://api.github.com/repos/Ylarod/Florida/releases?per_page=20")
+          florida_tag = ""
+          for release in releases:
+              if release.get("draft") or release.get("prerelease"):
+                  continue
+
+              tag = release.get("tag_name")
+              assets = {
+                  asset.get("name"): asset.get("browser_download_url")
+                  for asset in release.get("assets", [])
+              }
+              expected_assets = [
+                  f"florida-server-{tag}-android-{arch}.gz" for arch in REQUIRED_ARCHES
+              ]
+              if tag and all(asset_name in assets for asset_name in expected_assets):
+                  florida_tag = tag
+                  break
+
+          if not florida_tag:
+              print("No Florida release with all required server assets was found.", file=sys.stderr)
+              sys.exit(1)
+
+          module_release = get_json(
+              f"https://api.github.com/repos/{repo}/releases/latest",
+              allow_404=True,
+          )
+          module_tag = module_release.get("tag_name", "") if module_release else ""
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"LATESTFLORIDARELEASETAG={florida_tag}\n")
+              env_file.write(f"LATESTMODULETAG={module_tag}\n")
+
+          print(f"Resolved Florida tag: {florida_tag}")
+          print(f"Current module tag: {module_tag or '(none)'}")
+          PY
       - name: Check if release needed
         id: check_release
         run: |
-          if [ "${{ env.LATESTFLORIDARELEASETAG }}" != "${{ env.LATESTMODULETAG }}" ] && \
-             [ "${{ env.LATESTFLORIDARELEASETAG }}" != "null" ] && \
-             [ "${{ env.LATESTMODULETAG }}" != "null" ]; then
+          if [ -n "${{ env.LATESTFLORIDARELEASETAG }}" ] && \
+             [ "${{ env.LATESTFLORIDARELEASETAG }}" != "${{ env.LATESTMODULETAG }}" ]; then
             echo "should_release=true" >> $GITHUB_OUTPUT
           else
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
       - name: Cache vcpkg packages
         if: steps.check_release.outputs.should_release == 'true'
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             vcpkg
@@ -40,7 +89,7 @@ jobs:
       - name: Setup vcpkg if not cached
         if: steps.check_release.outputs.should_release == 'true'
         run: |
-          if [ ! -d "vcpkg" ]; then
+          if [ ! -x "vcpkg/vcpkg" ]; then
             git clone https://github.com/Microsoft/vcpkg.git
             cd vcpkg
             ./bootstrap-vcpkg.sh
@@ -55,13 +104,16 @@ jobs:
           cp build/MagiskHluda .
       - name: Download all Florida servers from ylarod's repo
         if: steps.check_release.outputs.should_release == 'true'
+        env:
+          MAGISKHLUDA_FLORIDA_TAG: ${{ env.LATESTFLORIDARELEASETAG }}
+          MAGISKHLUDA_REPOSITORY: ${{ github.repository }}
         run: ./MagiskHluda
 
       - name: Set up Node.js
         if: steps.check_release.outputs.should_release == 'true'
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
       - name: Bundle webpage with Vite
         if: steps.check_release.outputs.should_release == 'true'
         run: |
@@ -76,7 +128,7 @@ jobs:
           
           # Run Vite build directly with npx
           cd webroot
-          npm i
+          npm install
           npx vite build
 
       - name: Prepare release archives

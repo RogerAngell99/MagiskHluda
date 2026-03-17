@@ -5,6 +5,9 @@
 #include <vector>
 #include <chrono>
 #include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <unordered_map>
 #include "restclient-cpp/connection.h"
 #include "restclient-cpp/restclient.h"
 #include "rapidjson/document.h"
@@ -12,10 +15,120 @@
 
 namespace fs = std::filesystem;
 const std::string basePath = "./module_template/";
+namespace {
+    constexpr const char* kDefaultRepository = "RogerAngell99/MagiskHluda";
+    const std::array<std::string, 4> kArchitectures = {"arm", "arm64", "x86", "x86_64"};
+    std::unordered_map<std::string, std::string> g_downloadUrls;
 
-std::string utils::getRecentTag()
+    struct ParsedUrl
+    {
+        std::string baseUrl;
+        std::string path;
+    };
+
+    ParsedUrl parseUrl(const std::string& url)
+    {
+        const auto schemePos = url.find("://");
+        if (schemePos == std::string::npos)
+        {
+            throw std::runtime_error("Invalid URL: missing scheme in " + url);
+        }
+
+        const auto pathPos = url.find('/', schemePos + 3);
+        if (pathPos == std::string::npos)
+        {
+            return {url, "/"};
+        }
+
+        return {url.substr(0, pathPos), url.substr(pathPos)};
+    }
+
+    std::string getRepositorySlug()
+    {
+        const char* repository = std::getenv("MAGISKHLUDA_REPOSITORY");
+        if (repository != nullptr && repository[0] != '\0')
+        {
+            return repository;
+        }
+
+        repository = std::getenv("GITHUB_REPOSITORY");
+        if (repository != nullptr && repository[0] != '\0')
+        {
+            return repository;
+        }
+
+        return kDefaultRepository;
+    }
+
+    std::string getExpectedAssetName(const std::string& tag, const std::string& architecture)
+    {
+        return "florida-server-" + tag + "-android-" + architecture + ".gz";
+    }
+
+    bool loadReleaseMetadata(const rapidjson::Value& release)
+    {
+        if (!release.IsObject())
+        {
+            return false;
+        }
+
+        if (release.HasMember("draft") && release["draft"].IsBool() && release["draft"].GetBool())
+        {
+            return false;
+        }
+
+        if (release.HasMember("prerelease") && release["prerelease"].IsBool() && release["prerelease"].GetBool())
+        {
+            return false;
+        }
+
+        if (!release.HasMember("tag_name") || !release["tag_name"].IsString())
+        {
+            return false;
+        }
+
+        if (!release.HasMember("assets") || !release["assets"].IsArray())
+        {
+            return false;
+        }
+
+        const std::string tag = release["tag_name"].GetString();
+        std::unordered_map<std::string, std::string> releaseDownloadUrls;
+
+        for (const auto& asset : release["assets"].GetArray())
+        {
+            if (!asset.IsObject() || !asset.HasMember("name") || !asset["name"].IsString() ||
+                !asset.HasMember("browser_download_url") || !asset["browser_download_url"].IsString())
+            {
+                continue;
+            }
+
+            releaseDownloadUrls.emplace(asset["name"].GetString(), asset["browser_download_url"].GetString());
+        }
+
+        std::unordered_map<std::string, std::string> serverDownloadUrls;
+        for (const auto& architecture : kArchitectures)
+        {
+            const auto assetName = getExpectedAssetName(tag, architecture);
+            const auto assetIt = releaseDownloadUrls.find(assetName);
+            if (assetIt == releaseDownloadUrls.end())
+            {
+                return false;
+            }
+
+            serverDownloadUrls.emplace(architecture, assetIt->second);
+        }
+
+        utils::latestTag = tag;
+        g_downloadUrls = std::move(serverDownloadUrls);
+        std::ofstream("currentTag.txt") << utils::latestTag;
+        return true;
+    }
+}
+
+void utils::initializeReleaseMetadata()
 {
-    const std::string url = "https://api.github.com/repos/hzzheyang/strongR-frida-android/releases/latest";
+    const std::string url = "https://api.github.com/repos/Ylarod/Florida/releases?per_page=20";
     RestClient::Response response = RestClient::get(url);
 
     if (response.code != 200)
@@ -26,14 +139,40 @@ std::string utils::getRecentTag()
     rapidjson::Document d;
     d.Parse(response.body.c_str());
 
-    if (!d.HasMember("tag_name") || !d["tag_name"].IsString())
+    if (!d.IsArray())
     {
-        throw std::runtime_error("Invalid JSON response: missing or invalid 'tag_name'");
+        throw std::runtime_error("Invalid JSON response: expected releases array");
     }
 
-    std::string tag = d["tag_name"].GetString();
-    std::ofstream("currentTag.txt") << tag;
-    return tag;
+    const char* requestedTag = std::getenv("MAGISKHLUDA_FLORIDA_TAG");
+    if (requestedTag != nullptr && requestedTag[0] != '\0')
+    {
+        for (const auto& release : d.GetArray())
+        {
+            if (!release.IsObject() || !release.HasMember("tag_name") || !release["tag_name"].IsString())
+            {
+                continue;
+            }
+
+            if (release["tag_name"].GetString() == std::string(requestedTag) && loadReleaseMetadata(release))
+            {
+                return;
+            }
+        }
+
+        throw std::runtime_error("Requested Florida release tag is unavailable or missing required assets: " +
+            std::string(requestedTag));
+    }
+
+    for (const auto& release : d.GetArray())
+    {
+        if (loadReleaseMetadata(release))
+        {
+            return;
+        }
+    }
+
+    throw std::runtime_error("No Florida release with all required server assets was found");
 }
 
 void download(const std::string& aarch)
@@ -42,12 +181,17 @@ void download(const std::string& aarch)
 
     std::cout << "Starting To Downloaded florida for arch: " + aarch + "\n";
 
-    std::string url = "https://github.com/ylarod/florida/releases/download/" + utils::latestTag +
-        "/florida-server-" + utils::latestTag + "-android-" + aarch + ".gz";
+    const auto assetIt = g_downloadUrls.find(aarch);
+    if (assetIt == g_downloadUrls.end())
+    {
+        throw std::runtime_error("Missing download URL for architecture: " + aarch);
+    }
 
-    std::unique_ptr<RestClient::Connection> pConnection(new RestClient::Connection(url));
+    const auto parsedUrl = parseUrl(assetIt->second);
+
+    std::unique_ptr<RestClient::Connection> pConnection(new RestClient::Connection(parsedUrl.baseUrl));
     pConnection->FollowRedirects(true);
-    RestClient::Response response = pConnection->get("/");
+    RestClient::Response response = pConnection->get(parsedUrl.path);
 
     if (response.code != 200)
     {
@@ -71,7 +215,6 @@ void download(const std::string& aarch)
     auto end = std::chrono::system_clock::now();
 
     std::chrono::duration<double> elapsed_seconds = end - start;
-    std::time_t end_time = std::chrono::system_clock::to_time_t(end);
     std::cout
         << "Successfully Downloaded florida for arch: " + aarch + ". Took " + to_string(elapsed_seconds.count()) +
         "s\n";
@@ -80,9 +223,8 @@ void download(const std::string& aarch)
 void utils::downloadServers()
 {
     fs::create_directories("./bin");
-    const std::vector<std::string> archs = {"arm", "arm64", "x86", "x86_64"};
 
-    for (const auto& aarch : archs)
+    for (const auto& aarch : kArchitectures)
     {
         try
         {
@@ -99,6 +241,7 @@ void utils::downloadServers()
 void utils::createModuleProps()
 {
     std::ofstream moduleProps(basePath + "module.prop");
+    const auto repository = getRepositorySlug();
 
     if (!moduleProps)
     {
@@ -113,13 +256,14 @@ void utils::createModuleProps()
         << "versionCode=" << versionCode << '\n'
         << "author=The Community - Ylarod - Exo1i\n"
         << "description=Runs a stealthier frida-server on boot\n"
-        << "updateJson=https://github.com/exo1i/magiskhluda/releases/latest/download/update.json";
+        << "updateJson=https://github.com/" << repository << "/releases/latest/download/update.json";
 }
 
 void utils::createUpdateJson()
 {
     string versionCode = latestTag;
     versionCode.erase(std::remove(versionCode.begin(), versionCode.end(), '.'), versionCode.end());
+    const auto repository = getRepositorySlug();
 
     std::ofstream updateJson("update.json");
     if (!updateJson)
@@ -130,8 +274,8 @@ void utils::createUpdateJson()
     updateJson << "{\n"
         << R"(  "version": ")" << latestTag << "\",\n"
         << "  \"versionCode\": " << versionCode << ",\n"
-        << R"(  "zipUrl": "https://github.com/exo1i/magiskhluda/releases/download/)"
+        << R"(  "zipUrl": "https://github.com/)" << repository << R"(/releases/download/)"
         << latestTag << "/Magisk-Florida-Universal-" << latestTag << ".zip\",\n"
-        << R"(  "changelog": "https://gist.githubusercontent.com/Exo1i/22b6b1aa3a78d421f30410bc1bf24212/raw/0ad35b77c347748a311a004b9e5a558bf97bf357/gistfile1.txt")"
+        << R"(  "changelog": "https://github.com/)" << repository << "/releases/tag/" << latestTag << "\""
         << "\n}\n";
 }

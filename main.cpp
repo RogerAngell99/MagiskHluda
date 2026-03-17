@@ -2,11 +2,12 @@
 #include <iostream>
 #include "restclient-cpp/restclient.h"
 
-std::string utils::latestTag = utils::getRecentTag();
+std::string utils::latestTag;
 
 int main() {
     try {
         RestClient::init();
+        utils::initializeReleaseMetadata();
         utils::createModuleProps();
         utils::createUpdateJson();
         utils::downloadServers();
