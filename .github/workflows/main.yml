@@ -151,21 +151,7 @@ jobs:
               patch_name=$(basename "$patch_file")
               echo "Applying $name/$patch_name"
               if [ "$name" = "frida-core" ] && [ "$patch_name" = "0009-Florida-memfd-name-jit-cache.patch" ]; then
-                python3 - <<'PY'
-                from pathlib import Path
-
-                target = Path("lib/base/linux.vala")
-                original = "return Linux.syscall (LinuxSyscall.MEMFD_CREATE, name, flags);"
-                patched = 'return Linux.syscall (LinuxSyscall.MEMFD_CREATE, "jit-cache", flags);'
-
-                text = target.read_text(encoding="utf-8")
-                if patched in text:
-                    raise SystemExit("memfd-name-jit-cache workaround is already present unexpectedly")
-                if original not in text:
-                    raise SystemExit("Unable to locate memfd_create call for Florida workaround")
-
-                target.write_text(text.replace(original, patched, 1), encoding="utf-8")
-                PY
+                python3 -c "from pathlib import Path; target = Path('lib/base/linux.vala'); original = 'return Linux.syscall (LinuxSyscall.MEMFD_CREATE, name, flags);'; patched = 'return Linux.syscall (LinuxSyscall.MEMFD_CREATE, \\\"jit-cache\\\", flags);'; text = target.read_text(encoding='utf-8'); import sys; sys.exit('memfd-name-jit-cache workaround is already present unexpectedly') if patched in text else None; sys.exit('Unable to locate memfd_create call for Florida workaround') if original not in text else None; target.write_text(text.replace(original, patched, 1), encoding='utf-8')"
                 git add lib/base/linux.vala
                 git commit -m "Apply Florida memfd-name-jit-cache workaround"
               else
