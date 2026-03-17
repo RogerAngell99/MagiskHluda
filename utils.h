@@ -12,10 +12,9 @@ class utils {
 public:
     static string latestTag;
     static void initializeReleaseMetadata();
+    static void validateServerArtifacts();
 
     static void createModuleProps();
-
-    static void downloadServers();
 
     static void createUpdateJson();
 };

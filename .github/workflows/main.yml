@@ -7,10 +7,11 @@ permissions:
   contents: write
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch release info
+      - name: Resolve target version
+        id: resolve_version
         run: |
           python3 - <<'PY'
           import json
@@ -19,8 +20,8 @@ jobs:
           import urllib.error
           import urllib.request
 
-          REQUIRED_ARCHES = ("arm", "arm64", "x86", "x86_64")
           repo = os.environ["GITHUB_REPOSITORY"]
+          github_output = os.environ["GITHUB_OUTPUT"]
 
           def get_json(url: str, allow_404: bool = False):
               request = urllib.request.Request(url, headers={"User-Agent": "github-actions"})
@@ -32,26 +33,10 @@ jobs:
                       return None
                   raise
 
-          releases = get_json("https://api.github.com/repos/Ylarod/Florida/releases?per_page=20")
-          florida_tag = ""
-          for release in releases:
-              if release.get("draft") or release.get("prerelease"):
-                  continue
-
-              tag = release.get("tag_name")
-              assets = {
-                  asset.get("name"): asset.get("browser_download_url")
-                  for asset in release.get("assets", [])
-              }
-              expected_assets = [
-                  f"florida-server-{tag}-android-{arch}.gz" for arch in REQUIRED_ARCHES
-              ]
-              if tag and all(asset_name in assets for asset_name in expected_assets):
-                  florida_tag = tag
-                  break
-
-          if not florida_tag:
-              print("No Florida release with all required server assets was found.", file=sys.stderr)
+          frida_release = get_json("https://api.github.com/repos/frida/frida/releases/latest")
+          frida_tag = frida_release.get("tag_name", "")
+          if not frida_tag:
+              print("Unable to resolve the latest Frida release tag.", file=sys.stderr)
               sys.exit(1)
 
           module_release = get_json(
@@ -59,104 +44,165 @@ jobs:
               allow_404=True,
           )
           module_tag = module_release.get("tag_name", "") if module_release else ""
+          patch_ref = frida_tag
+          patch_tag = get_json(
+              f"https://api.github.com/repos/Ylarod/Florida/git/ref/tags/{frida_tag}",
+              allow_404=True,
+          )
+          if patch_tag is None:
+              patch_ref = "main"
+              print(f"Florida tag {frida_tag} not found. Falling back to Florida/main patches.")
 
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
-              env_file.write(f"LATESTFLORIDARELEASETAG={florida_tag}\n")
-              env_file.write(f"LATESTMODULETAG={module_tag}\n")
+          should_release = frida_tag != module_tag
 
-          print(f"Resolved Florida tag: {florida_tag}")
+          with open(github_output, "a", encoding="utf-8") as output_file:
+              output_file.write(f"release_tag={frida_tag}\n")
+              output_file.write(f"module_tag={module_tag}\n")
+              output_file.write(f"patch_ref={patch_ref}\n")
+              output_file.write(f"should_release={'true' if should_release else 'false'}\n")
+
+          print(f"Resolved Frida tag: {frida_tag}")
           print(f"Current module tag: {module_tag or '(none)'}")
+          print(f"Using Florida patches from: {patch_ref}")
           PY
-      - name: Check if release needed
-        id: check_release
-        run: |
-          if [ -n "${{ env.LATESTFLORIDARELEASETAG }}" ] && \
-             [ "${{ env.LATESTFLORIDARELEASETAG }}" != "${{ env.LATESTMODULETAG }}" ]; then
-            echo "should_release=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_release=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Cache vcpkg packages
-        if: steps.check_release.outputs.should_release == 'true'
-        uses: actions/cache@v4
-        with:
-          path: |
-            vcpkg
-            ~/vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json', '**/vcpkg-configuration.json') }}
-          restore-keys: |
-            ${{ runner.os }}-vcpkg-
-      - name: Setup vcpkg if not cached
-        if: steps.check_release.outputs.should_release == 'true'
-        run: |
-          if [ ! -x "vcpkg/vcpkg" ]; then
-            git clone https://github.com/Microsoft/vcpkg.git
-            cd vcpkg
-            ./bootstrap-vcpkg.sh
-            ./vcpkg install rapidjson restclient-cpp
-            cd ..
-          fi
       - name: Build MagiskHluda
-        if: steps.check_release.outputs.should_release == 'true'
+        if: steps.resolve_version.outputs.should_release == 'true'
         run: |
-          cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake
+          cmake -B build -S .
           cmake --build build --config Release
-          cp build/MagiskHluda .
-      - name: Download all Florida servers from ylarod's repo
-        if: steps.check_release.outputs.should_release == 'true'
-        env:
-          MAGISKHLUDA_FLORIDA_TAG: ${{ env.LATESTFLORIDARELEASETAG }}
-          MAGISKHLUDA_REPOSITORY: ${{ github.repository }}
-        run: ./MagiskHluda
-
       - name: Set up Node.js
-        if: steps.check_release.outputs.should_release == 'true'
+        if: steps.resolve_version.outputs.should_release == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      - name: Bundle webpage with Vite
-        if: steps.check_release.outputs.should_release == 'true'
+          node-version: '18'
+      - name: Set up JDK 17
+        if: steps.resolve_version.outputs.should_release == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Setup Android NDK
+        if: steps.resolve_version.outputs.should_release == 'true'
+        id: setup_ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+          local-cache: false
+          link-to-sdk: true
+      - name: Set up Python 3.9
+        if: steps.resolve_version.outputs.should_release == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Install build dependencies
+        if: steps.resolve_version.outputs.should_release == 'true'
         run: |
-          # Check if webroot directory exists
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install \
+            build-essential \
+            tree \
+            ninja-build \
+            gcc-multilib \
+            g++-multilib \
+            lib32stdc++-9-dev \
+            flex \
+            bison \
+            ruby \
+            ruby-dev \
+            python3-requests \
+            python3-setuptools \
+            python3-dev \
+            python3-pip \
+            libc6-dev \
+            libc6-dev-i386 \
+            -y
+          sudo gem install fpm -v 1.11.0 --no-document
+          python3 -m pip install lief graphlib
+      - name: Build latest Frida with Florida patches
+        if: steps.resolve_version.outputs.should_release == 'true'
+        env:
+          MAGISKHLUDA_RELEASE_TAG: ${{ steps.resolve_version.outputs.release_tag }}
+          MAGISKHLUDA_PATCH_REF: ${{ steps.resolve_version.outputs.patch_ref }}
+          ANDROID_NDK_ROOT: ${{ steps.setup_ndk.outputs.ndk-path }}
+        run: |
+          rm -rf florida-patches frida build-android-arm build-android-arm64 build-android-x86 build-android-x86_64 bin
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git clone --depth 1 --branch "$MAGISKHLUDA_PATCH_REF" https://github.com/Ylarod/Florida.git florida-patches
+          git clone --depth 1 --branch "$MAGISKHLUDA_RELEASE_TAG" --recurse-submodules https://github.com/frida/frida.git frida
+
+          cd frida
+          shopt -s nullglob
+          for path in ../florida-patches/patches/*; do
+            name=$(basename "$path")
+            if [ ! -d "subprojects/$name" ]; then
+              echo "Missing Frida subproject for patch set: $name"
+              exit 1
+            fi
+            if ! compgen -G "../florida-patches/patches/$name/*.patch" > /dev/null; then
+              echo "No patch files found in $path"
+              exit 1
+            fi
+            cd "subprojects/$name"
+            git am "../../../florida-patches/patches/$name/"*.patch
+            cd ../..
+          done
+          cd ..
+
+          for arch in android-arm android-arm64 android-x86 android-x86_64; do
+            mkdir "build-$arch"
+            pushd "build-$arch"
+            ../frida/configure --host="$arch"
+            make -j"$(nproc)"
+            popd
+          done
+
+          mkdir -p bin
+          gzip -c build-android-arm/subprojects/frida-core/server/frida-server > bin/florida-arm.gz
+          gzip -c build-android-arm64/subprojects/frida-core/server/frida-server > bin/florida-arm64.gz
+          gzip -c build-android-x86/subprojects/frida-core/server/frida-server > bin/florida-x86.gz
+          gzip -c build-android-x86_64/subprojects/frida-core/server/frida-server > bin/florida-x64.gz
+      - name: Generate module metadata
+        if: steps.resolve_version.outputs.should_release == 'true'
+        env:
+          MAGISKHLUDA_RELEASE_TAG: ${{ steps.resolve_version.outputs.release_tag }}
+          MAGISKHLUDA_REPOSITORY: ${{ github.repository }}
+        run: ./build/MagiskHluda
+      - name: Bundle webpage with Vite
+        if: steps.resolve_version.outputs.should_release == 'true'
+        run: |
           if [ ! -d "webroot" ]; then
             echo "Error: webroot directory not found in the repository"
             exit 1
           fi
-          
-          # Create webroot directory in module_template if it doesn't exist
           mkdir -p module_template/webroot
-          
-          # Run Vite build directly with npx
           cd webroot
           npm install
           npx vite build
-
       - name: Prepare release archives
-        if: steps.check_release.outputs.should_release == 'true'
+        if: steps.resolve_version.outputs.should_release == 'true'
         run: |
           for arch in arm arm64 x86 x86_64; do
             FILENAME="florida-$([[ "$arch" == "x86_64" ]] && echo "x64" || echo "$arch").gz"
             mkdir -p "arch_release_$arch/bin"
             cp -r module_template/* "arch_release_$arch/"
             cp "bin/$FILENAME" "arch_release_$arch/bin/"
-            (cd "arch_release_$arch" && zip -r "../Magisk-Florida-$arch-$LATESTFLORIDARELEASETAG.zip" .)
+            (cd "arch_release_$arch" && zip -r "../Magisk-Florida-$arch-${{ steps.resolve_version.outputs.release_tag }}.zip" .)
           done
-          
-          # Universal package
           mkdir -p universal_release
           cp -r module_template/* universal_release/
-          mkdir -p "universal_release/bin"
+          mkdir -p universal_release/bin
           cp -r bin/* universal_release/bin/
-          (cd universal_release && zip -r "../Magisk-Florida-Universal-$LATESTFLORIDARELEASETAG.zip" .)
-      - name: Release Packages
-        if: steps.check_release.outputs.should_release == 'true'
-        uses: ncipollo/release-action@v1.13.0
-        with:
-          artifacts: |
-            ./*.zip
-            update.json
-          name: "Magisk Module for Florida Server ${{ env.LATESTFLORIDARELEASETAG }}"
-          tag: "${{ env.LATESTFLORIDARELEASETAG }}"
-          body: "Universal package and architecture-specific packages for Florida Server ${{env.LATESTFLORIDARELEASETAG}}"
-          generateReleaseNotes: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+          (cd universal_release && zip -r "../Magisk-Florida-Universal-${{ steps.resolve_version.outputs.release_tag }}.zip" .)
+      - name: Publish release
+        if: steps.resolve_version.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAGISKHLUDA_RELEASE_TAG: ${{ steps.resolve_version.outputs.release_tag }}
+        run: |
+          gh release create "$MAGISKHLUDA_RELEASE_TAG" \
+            ./*.zip \
+            update.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Magisk Module for Florida Server $MAGISKHLUDA_RELEASE_TAG" \
+            --notes "Universal package and architecture-specific packages for Florida Server $MAGISKHLUDA_RELEASE_TAG"

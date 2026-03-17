@@ -1,46 +1,34 @@
-#include <fstream>
-#include <filesystem>
-#include <iostream>
-#include <stdexcept>
-#include <vector>
-#include <chrono>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdlib>
-#include <unordered_map>
-#include "restclient-cpp/connection.h"
-#include "restclient-cpp/restclient.h"
-#include "rapidjson/document.h"
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <string>
 #include "utils.h"
 
 namespace fs = std::filesystem;
 const std::string basePath = "./module_template/";
+
 namespace {
     constexpr const char* kDefaultRepository = "RogerAngell99/MagiskHluda";
-    const std::array<std::string, 4> kArchitectures = {"arm", "arm64", "x86", "x86_64"};
-    std::unordered_map<std::string, std::string> g_downloadUrls;
-
-    struct ParsedUrl
-    {
-        std::string baseUrl;
-        std::string path;
+    const std::array<const char*, 4> kRequiredBinaries = {
+        "bin/florida-arm.gz",
+        "bin/florida-arm64.gz",
+        "bin/florida-x86.gz",
+        "bin/florida-x64.gz",
     };
 
-    ParsedUrl parseUrl(const std::string& url)
+    std::string trim(std::string value)
     {
-        const auto schemePos = url.find("://");
-        if (schemePos == std::string::npos)
-        {
-            throw std::runtime_error("Invalid URL: missing scheme in " + url);
-        }
-
-        const auto pathPos = url.find('/', schemePos + 3);
-        if (pathPos == std::string::npos)
-        {
-            return {url, "/"};
-        }
-
-        return {url.substr(0, pathPos), url.substr(pathPos)};
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch) {
+            return !std::isspace(ch);
+        }));
+        value.erase(std::find_if(value.rbegin(), value.rend(), [](unsigned char ch) {
+            return !std::isspace(ch);
+        }).base(), value.end());
+        return value;
     }
 
     std::string getRepositorySlug()
@@ -60,180 +48,58 @@ namespace {
         return kDefaultRepository;
     }
 
-    std::string getExpectedAssetName(const std::string& tag, const std::string& architecture)
+    std::string getConfiguredReleaseTag()
     {
-        return "florida-server-" + tag + "-android-" + architecture + ".gz";
-    }
+        const std::array<const char*, 3> envNames = {
+            "MAGISKHLUDA_RELEASE_TAG",
+            "MAGISKHLUDA_FLORIDA_TAG",
+            "GITHUB_REF_NAME",
+        };
 
-    bool loadReleaseMetadata(const rapidjson::Value& release)
-    {
-        if (!release.IsObject())
+        for (const auto* envName : envNames)
         {
-            return false;
-        }
-
-        if (release.HasMember("draft") && release["draft"].IsBool() && release["draft"].GetBool())
-        {
-            return false;
-        }
-
-        if (release.HasMember("prerelease") && release["prerelease"].IsBool() && release["prerelease"].GetBool())
-        {
-            return false;
-        }
-
-        if (!release.HasMember("tag_name") || !release["tag_name"].IsString())
-        {
-            return false;
-        }
-
-        if (!release.HasMember("assets") || !release["assets"].IsArray())
-        {
-            return false;
-        }
-
-        const std::string tag = release["tag_name"].GetString();
-        std::unordered_map<std::string, std::string> releaseDownloadUrls;
-
-        for (const auto& asset : release["assets"].GetArray())
-        {
-            if (!asset.IsObject() || !asset.HasMember("name") || !asset["name"].IsString() ||
-                !asset.HasMember("browser_download_url") || !asset["browser_download_url"].IsString())
+            const char* envValue = std::getenv(envName);
+            if (envValue != nullptr && envValue[0] != '\0')
             {
-                continue;
+                return envValue;
             }
-
-            releaseDownloadUrls.emplace(asset["name"].GetString(), asset["browser_download_url"].GetString());
         }
 
-        std::unordered_map<std::string, std::string> serverDownloadUrls;
-        for (const auto& architecture : kArchitectures)
+        std::ifstream currentTag("currentTag.txt");
+        if (currentTag)
         {
-            const auto assetName = getExpectedAssetName(tag, architecture);
-            const auto assetIt = releaseDownloadUrls.find(assetName);
-            if (assetIt == releaseDownloadUrls.end())
+            std::string tag;
+            std::getline(currentTag, tag);
+            tag = trim(tag);
+            if (!tag.empty())
             {
-                return false;
+                return tag;
             }
-
-            serverDownloadUrls.emplace(architecture, assetIt->second);
         }
 
-        utils::latestTag = tag;
-        g_downloadUrls = std::move(serverDownloadUrls);
-        std::ofstream("currentTag.txt") << utils::latestTag;
-        return true;
+        throw std::runtime_error(
+            "Missing release tag. Set MAGISKHLUDA_RELEASE_TAG before generating metadata.");
     }
 }
 
 void utils::initializeReleaseMetadata()
 {
-    const std::string url = "https://api.github.com/repos/Ylarod/Florida/releases?per_page=20";
-    RestClient::Response response = RestClient::get(url);
-
-    if (response.code != 200)
+    latestTag = trim(getConfiguredReleaseTag());
+    if (latestTag.empty())
     {
-        throw std::runtime_error("HTTP Error: " + std::to_string(response.code) + " " + response.body);
+        throw std::runtime_error("Resolved release tag is empty");
     }
 
-    rapidjson::Document d;
-    d.Parse(response.body.c_str());
-
-    if (!d.IsArray())
-    {
-        throw std::runtime_error("Invalid JSON response: expected releases array");
-    }
-
-    const char* requestedTag = std::getenv("MAGISKHLUDA_FLORIDA_TAG");
-    if (requestedTag != nullptr && requestedTag[0] != '\0')
-    {
-        for (const auto& release : d.GetArray())
-        {
-            if (!release.IsObject() || !release.HasMember("tag_name") || !release["tag_name"].IsString())
-            {
-                continue;
-            }
-
-            if (release["tag_name"].GetString() == std::string(requestedTag) && loadReleaseMetadata(release))
-            {
-                return;
-            }
-        }
-
-        throw std::runtime_error("Requested Florida release tag is unavailable or missing required assets: " +
-            std::string(requestedTag));
-    }
-
-    for (const auto& release : d.GetArray())
-    {
-        if (loadReleaseMetadata(release))
-        {
-            return;
-        }
-    }
-
-    throw std::runtime_error("No Florida release with all required server assets was found");
+    std::ofstream("currentTag.txt") << latestTag;
 }
 
-void download(const std::string& aarch)
+void utils::validateServerArtifacts()
 {
-    auto start = std::chrono::system_clock::now();
-
-    std::cout << "Starting To Downloaded florida for arch: " + aarch + "\n";
-
-    const auto assetIt = g_downloadUrls.find(aarch);
-    if (assetIt == g_downloadUrls.end())
+    for (const auto* binaryPath : kRequiredBinaries)
     {
-        throw std::runtime_error("Missing download URL for architecture: " + aarch);
-    }
-
-    const auto parsedUrl = parseUrl(assetIt->second);
-
-    std::unique_ptr<RestClient::Connection> pConnection(new RestClient::Connection(parsedUrl.baseUrl));
-    pConnection->FollowRedirects(true);
-    RestClient::Response response = pConnection->get(parsedUrl.path);
-
-    if (response.code != 200)
-    {
-        throw std::runtime_error("Download failed: " + std::to_string(response.code) + " " + response.body);
-    }
-    std::string filename;
-    if (aarch == "x86_64")
-        filename = "bin/florida-x64.gz";
-    else
-        filename = "bin/florida-" + aarch + ".gz";
-
-    std::ofstream downloadedFile(filename, std::ios::out | std::ios::binary);
-
-    if (!downloadedFile)
-    {
-        throw std::runtime_error("Failed to open file for writing: " + filename);
-    }
-
-    downloadedFile.write(response.body.c_str(), response.body.length());
-
-    auto end = std::chrono::system_clock::now();
-
-    std::chrono::duration<double> elapsed_seconds = end - start;
-    std::cout
-        << "Successfully Downloaded florida for arch: " + aarch + ". Took " + to_string(elapsed_seconds.count()) +
-        "s\n";
-}
-
-void utils::downloadServers()
-{
-    fs::create_directories("./bin");
-
-    for (const auto& aarch : kArchitectures)
-    {
-        try
+        if (!fs::exists(binaryPath))
         {
-            download(aarch);
-        }
-        catch (const std::exception& e)
-        {
-            std::cerr << "Error downloading " << aarch << ": " << e.what() << std::endl;
-            throw std::runtime_error("Error downloading " + aarch + ": " + e.what());
+            throw std::runtime_error("Missing expected compiled server artifact: " + std::string(binaryPath));
         }
     }
 }
@@ -248,7 +114,7 @@ void utils::createModuleProps()
         throw std::runtime_error("Failed to open module.prop for writing");
     }
 
-    string versionCode = latestTag;
+    std::string versionCode = latestTag;
     versionCode.erase(std::remove(versionCode.begin(), versionCode.end(), '.'), versionCode.end());
     moduleProps << "id=magisk-hluda\n"
         << "name=Frida(Florida) Server on Boot\n"
@@ -261,7 +127,7 @@ void utils::createModuleProps()
 
 void utils::createUpdateJson()
 {
-    string versionCode = latestTag;
+    std::string versionCode = latestTag;
     versionCode.erase(std::remove(versionCode.begin(), versionCode.end(), '.'), versionCode.end());
     const auto repository = getRepositorySlug();
 

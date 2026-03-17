@@ -41,7 +41,7 @@ Stopping the Florida server **may cause the System UI to crash**. This is a know
 
 ## **Automatic Updates**
 
-- **Updates are checked every 12 hours**, ensuring you always have the latest version.
+- **Updates are checked every 12 hours**, and the workflow now compiles the latest official Frida release with Florida patches before publishing module packages.
 
 ## **Troubleshooting**
 
@@ -49,11 +49,17 @@ If you encounter any issues, refer to the [Troubleshooting Guide](https://github
 
 ## **Building from Source**
 
-1. **Install dependencies:** Install `rapidjson` and `restclient-cpp` using [vcpkg](https://vcpkg.io/en/getting-started):
+1. **Build the metadata generator:**
    ```bash
-   ./vcpkg install rapidjson restclient-cpp
+   cmake -B build -S .
+   cmake --build build --config Release
    ```
-2. **Run the code:** Execute `main.cpp` in your preferred IDE (CLion or Visual Studio is recommended).
+2. **Provide the compiled server binaries** in `bin/` as `florida-arm.gz`, `florida-arm64.gz`, `florida-x86.gz`, and `florida-x64.gz`.
+3. **Generate module metadata:**
+   ```bash
+   MAGISKHLUDA_RELEASE_TAG=<frida-version> ./build/MagiskHluda
+   ```
+4. **Use GitHub Actions for the full pipeline:** the workflow is responsible for compiling the latest Frida with Florida patches and packaging the final ZIP releases.
 
 ## **Credits**
 
