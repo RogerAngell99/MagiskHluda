@@ -145,9 +145,34 @@ jobs:
               echo "No patch files found in $path"
               exit 1
             fi
-            cd "subprojects/$name"
-            git am -3 "../../../florida-patches/patches/$name/"*.patch
-            cd ../..
+
+            pushd "subprojects/$name" > /dev/null
+            for patch_file in ../../../florida-patches/patches/"$name"/*.patch; do
+              patch_name=$(basename "$patch_file")
+              echo "Applying $name/$patch_name"
+              if [ "$name" = "frida-core" ] && [ "$patch_name" = "0009-Florida-memfd-name-jit-cache.patch" ]; then
+                python3 - <<'PY'
+                from pathlib import Path
+
+                target = Path("lib/base/linux.vala")
+                original = "return Linux.syscall (LinuxSyscall.MEMFD_CREATE, name, flags);"
+                patched = 'return Linux.syscall (LinuxSyscall.MEMFD_CREATE, "jit-cache", flags);'
+
+                text = target.read_text(encoding="utf-8")
+                if patched in text:
+                    raise SystemExit("memfd-name-jit-cache workaround is already present unexpectedly")
+                if original not in text:
+                    raise SystemExit("Unable to locate memfd_create call for Florida workaround")
+
+                target.write_text(text.replace(original, patched, 1), encoding="utf-8")
+                PY
+                git add lib/base/linux.vala
+                git commit -m "Apply Florida memfd-name-jit-cache workaround"
+              else
+                git am -3 "$patch_file"
+              fi
+            done
+            popd > /dev/null
           done
           cd ..
 
